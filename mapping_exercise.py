@@ -101,7 +101,112 @@ def inverse_bwt(bwt_string):
     return "".join(reversed(text_rev)) + "$"
 
 # ================== Task 3: The FMIndex class==================
+class FMIndex:
+    def __init__(self, text, s):
+        sa = suffix_array(text)
+        self.bwt = "".join(text[i - 1] for i in sa)
+        self.first_occurrence = first_occurrence(self.bwt)
+        self.s = s
 
+        # self.counts[X][i] is the number of X in self.bwt[:i]
+        alphabet = list(self.first_occurrence.keys())
+        self.counts = {char: [0] * (len(self.bwt) + 1) for char in alphabet}
+
+        for i, char in enumerate(self.bwt):
+            for a in alphabet:
+                self.counts[a][i + 1] = self.counts[a][i]
+            self.counts[char][i + 1] += 1
+
+        # Sampled suffix array
+        self.sampled = {row: sa[row] for row in range(len(sa)) if sa[row] % s == 0}
+
+    def lf(self, row):
+        char = self.bwt[row]
+        return self.first_occurrence[char] + self.counts[char][row]
+
+    def count(self, p):
+        top, bottom = 0, len(self.bwt)
+        for char in reversed(p):
+            if char not in self.first_occurrence:
+                return top, top  # Pattern does not occur
+
+            top = self.first_occurrence[char] + self.counts[char][top]
+            bottom = self.first_occurrence[char] + self.counts[char][bottom]
+
+            if top >= bottom:
+                return top, top
+        return top, bottom
+
+    def locate(self, p):
+        top, bottom = self.count(p)
+        positions = []
+        for r in range(top, bottom):
+            curr_row = r
+            steps = 0
+            while curr_row not in self.sampled:
+                curr_row = self.lf(curr_row)
+                steps += 1
+            positions.append(self.sampled[curr_row] + steps)
+        return positions
+
+
+# ================== Task 4: Mapping reads ==================
+def reverse_complement(seq):
+    complement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A'}
+    return "".join(complement.get(base, base) for base in reversed(seq))
+
+
+def hamming(a, b):
+    assert len(a) == len(b), "Strings must be of the same length"
+    return sum(1 for x, y in zip(a, b) if x != y)
+
+
+def seeds(read, n):
+    pieces = []
+    L = len(read)
+    for i in range(n):
+        start = i * L // n
+        end = (i + 1) * L // n if i < n - 1 else L
+        pieces.append((start, read[start:end]))
+    return pieces
+
+
+def map_read(read, fm, ref, d=2, n_seeds=None):
+    if n_seeds is None:
+        n_seeds = d + 1
+
+    hits = []
+    total_candidates = 0
+    read_len = len(read)
+
+    for strand, query in [("+", read), ("-", reverse_complement(read))]:
+        candidates = set()
+        for offset, seed in seeds(query, n_seeds):
+            for p in fm.locate(seed):
+                start = p - offset
+                # Zabrání přesahu mimo referenční genom
+                if 0 <= start <= len(ref) - read_len:
+                    candidates.add(start)
+
+        total_candidates += len(candidates)
+        # Verifikace kandidátů pomocí Hammingovy vzdálenosti
+        for start in candidates:
+            mismatches = hamming(query, ref[start:start + read_len])
+            if mismatches <= d:
+                hits.append((strand, start, mismatches))
+
+    return sorted(hits), total_candidates
+
+
+def brute_map(read, ref, d=2):
+    hits = []
+    read_len = len(read)
+    for strand, query in [("+", read), ("-", reverse_complement(read))]:
+        for start in range(len(ref) - read_len + 1):
+            mismatches = hamming(query, ref[start:start + read_len])
+            if mismatches <= d:
+                hits.append((strand, start, mismatches))
+    return sorted(hits)
 
 #============ Self-checks =========
 if __name__ == "__main__":
@@ -150,3 +255,41 @@ if __name__ == "__main__":
     print("Recovered text:", recovered_text)
 
     print("\n=============TASK 3 ============")
+    text = "CAT$"
+    s = 2
+    idx = FMIndex(text, s)
+
+    print("Text:", text)
+    print("Sampling step:", s)
+
+    print("BWT:", idx.bwt)
+
+    print("Counts for 'T':", idx.counts["T"])
+
+    print("Sampled suffix array:", idx.sampled)
+
+    print("LF mapping for row 1:", idx.lf(1))
+
+    print("Count interval for 'AT':", idx.count("AT"))
+
+    print("Locate positions for 'AT':",idx.locate("AT"))
+
+    print("\n=============TASK 4 ============")
+    # Test reverse_complement
+    print("reverse_complement('AACG'):", reverse_complement("AACG"))
+
+    # Test hamming
+    print("hamming('ACGT', 'AGGA'):", hamming("ACGT", "AGGA"))
+
+    # Test seeds
+    print("seeds('ACGTACGTAC', 3):", seeds("ACGTACGTAC", 3))
+
+    # Malý test pro map_read a brute_map
+    ref_test = "ACGTACGTACGTACGT"
+    read_test = "ACGTACGT"
+    fm_test = FMIndex(ref_test + "$", 2)
+
+    hits, cands = map_read(read_test, fm_test, ref_test, d=0)
+    print("\nmap_read (d=0) hits:", hits, "| candidates checked:", cands)
+
+    print("brute_map (d=0) hits:", brute_map(read_test, ref_test, d=0))
